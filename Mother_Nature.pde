@@ -90,6 +90,9 @@ void setup() {
 
 // --- DRAW ---
 void draw() {
+    // 1. Create a temporary list to hold buildings created this frame.
+    ArrayList<PVector> newBuildingsThisFrame = new ArrayList<PVector>();
+
     // --- FACTORY ACTIONS (Spread and Repair) ---
     for (Factory f : factories) {
         if (!f.isActive) continue;
@@ -116,6 +119,8 @@ void draw() {
                     if (random(1) < HOUSE_CHANCE) {
                         houseGrid[nx][ny] = (int)random(1, 6);
                     }
+                    // 2. Add the newly created building to our temporary list.
+                    newBuildingsThisFrame.add(neighborToConvert);
                 }
             }
         }
@@ -123,7 +128,8 @@ void draw() {
     }
 
     // --- NATURE ACTIONS (Decay, Vines, and Gravel) ---
-    nature.update(); // Call the new, consolidated update method
+    // 3. Pass the list of new buildings to the nature update method.
+    nature.update(newBuildingsThisFrame);
 
     // --- RENDER THE SCENE in layers ---
     // 1. Draw the pre-rendered static background
@@ -375,9 +381,41 @@ ArrayList<PVector> getAnyGrassNeighbors(PVector p) {
     
 // --- KEYBOARD INPUT ---
 void keyPressed() {
-    if (key == 'f' || key == 'F') {
-        for (Factory f : factories) {
-            f.isActive = !f.isActive;
-        }
-    }
+  switch (key) {
+    case 'f':
+    case 'F':
+      // Toggle all factories on/off at once
+      for (Factory f : factories) {
+        f.isActive = !f.isActive;
+      }
+      break;
+
+    case '1':
+      // Toggle Factory 1 (at index 0)
+      if (factories.size() >= 1) {
+        factories.get(0).isActive = !factories.get(0).isActive;
+      }
+      break;
+
+    case '2':
+      // Toggle Factory 2 (at index 1)
+      if (factories.size() >= 2) {
+        factories.get(1).isActive = !factories.get(1).isActive;
+      }
+      break;
+
+    case '3':
+      // Toggle Factory 3 (at index 2)
+      if (factories.size() >= 3) {
+        factories.get(2).isActive = !factories.get(2).isActive;
+      }
+      break;
+
+    case '4':
+      // Toggle Factory 4 (at index 3)
+      if (factories.size() >= 4) {
+        factories.get(3).isActive = !factories.get(3).isActive;
+      }
+      break;
+  }
 }
