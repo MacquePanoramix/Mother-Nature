@@ -62,20 +62,24 @@ void setup() {
     colorGrid = new color[gridWidth][gridHeight];
     houseGrid = new int[gridWidth][gridHeight];
     overgrowthGrid = new float[gridWidth][gridHeight];
-    gravelGrid = new float[gridWidth][gridHeight]; // Initialize the new grid
+    gravelGrid = new float[gridWidth][gridHeight];
     nature = new Nature();
 
+    // MOVED: Initialize and populate the factories list FIRST...
     factories = new ArrayList<Factory>();
-    factories.add(new Factory(1, 150 / PIXEL_SCALE, 150 / PIXEL_SCALE));
-    factories.add(new Factory(2, 650 / PIXEL_SCALE, 150 / PIXEL_SCALE));
-    factories.add(new Factory(3, 150 / PIXEL_SCALE, 450 / PIXEL_SCALE));
-    factories.add(new Factory(4, 650 / PIXEL_SCALE, 450 / PIXEL_SCALE));
+    factories.add(new Factory(1, 150 / PIXEL_SCALE, 150 / PIXEL_SCALE)); // Top-left
+    factories.add(new Factory(2, 650 / PIXEL_SCALE, 150 / PIXEL_SCALE)); // Top-right
+    factories.add(new Factory(3, 150 / PIXEL_SCALE, 450 / PIXEL_SCALE)); // Bottom-left
+    factories.add(new Factory(4, 650 / PIXEL_SCALE, 450 / PIXEL_SCALE)); // Bottom-right
+    factories.add(new Factory(5, 400 / PIXEL_SCALE, 150 / PIXEL_SCALE)); // NEW: Top-middle
+    factories.add(new Factory(6, 400 / PIXEL_SCALE, 450 / PIXEL_SCALE)); // NEW: Bottom-middle
 
-    // Render the static background (now without any gravel)
+
+    // ...THEN initialize the buffer and render the background that uses the factory locations.
     backgroundBuffer = createGraphics(width, height);
     renderStaticBackground();
 
-    // Set the initial state of the grid for the factories
+    // This part remains the same, setting the initial state of the grid.
     for(Factory f : factories) {
         int x = (int)f.location.x;
         int y = (int)f.location.y;
@@ -415,6 +419,20 @@ void keyPressed() {
       // Toggle Factory 4 (at index 3)
       if (factories.size() >= 4) {
         factories.get(3).isActive = !factories.get(3).isActive;
+      }
+      break;
+      
+    case '5':
+      // NEW: Toggle Factory 5 (at index 4)
+      if (factories.size() >= 5) {
+        factories.get(4).isActive = !factories.get(4).isActive;
+      }
+      break;
+      
+    case '6':
+      // NEW: Toggle Factory 6 (at index 5)
+      if (factories.size() >= 6) {
+        factories.get(5).isActive = !factories.get(5).isActive;
       }
       break;
   }
