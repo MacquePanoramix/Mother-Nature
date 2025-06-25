@@ -5,11 +5,58 @@ class Nature {
         this.vines = new ArrayList<Vine>();
     }
 
-    void reclaim() {
-        // --- This buffer is for the NEW internal spread logic ---
-        float[][] damageToApply = new float[gridWidth][gridHeight];
+    // This method now handles all of nature's actions for a frame
+    void update() {
+        updateVinesAndDecay();
+        updateGravel();
+    }
 
-        // --- 1. EXISTING VINE LOGIC (No changes here) ---
+    void updateGravel() {
+        float[][] influenceGrid = new float[gridWidth][gridHeight];
+        int radius = (int)GRAVEL_AURA_RADIUS;
+
+        // Step 1: Calculate the "civilization pressure" from all buildings
+        for (int x = 0; x < gridWidth; x++) {
+            for (int y = 0; y < gridHeight; y++) {
+                if (grid[x][y] > 0) { // If there is a building here
+                    // Spread influence to the surrounding area
+                    for (int ny = -radius; ny <= radius; ny++) {
+                        for (int nx = -radius; nx <= radius; nx++) {
+                            int checkX = x + nx;
+                            int checkY = y + ny;
+
+                            if (checkX >= 0 && checkX < gridWidth && checkY >= 0 && checkY < gridHeight) {
+                                float distance = dist(0, 0, nx, ny);
+                                if (distance <= GRAVEL_AURA_RADIUS) {
+                                    float influence = 1.0f - (distance / GRAVEL_AURA_RADIUS);
+                                    influenceGrid[checkX][checkY] = max(influenceGrid[checkX][checkY], influence);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Step 2: Evolve the main gravelGrid towards the influence grid
+        for (int x = 0; x < gridWidth; x++) {
+            for (int y = 0; y < gridHeight; y++) {
+                float currentGravel = gravelGrid[x][y];
+                float targetGravel = influenceGrid[x][y];
+
+                if (currentGravel < targetGravel) {
+                    gravelGrid[x][y] += GRAVEL_BUILD_RATE;
+                } else if (currentGravel > targetGravel) {
+                    gravelGrid[x][y] -= GRAVEL_DECAY_RATE;
+                }
+                gravelGrid[x][y] = constrain(gravelGrid[x][y], 0, 1);
+            }
+        }
+    }
+
+    void updateVinesAndDecay() {
+        // This is the old "reclaim" logic
+        float[][] damageToApply = new float[gridWidth][gridHeight];
         ArrayList<PVector> currentGlobalEdge = new ArrayList<PVector>();
         for (Factory f : factories) {
             currentGlobalEdge.addAll(f.activeEdge);
@@ -28,7 +75,6 @@ class Nature {
             }
         }
 
-        // --- 2. EXISTING EDGE EROSION LOGIC (No changes here) ---
         HashMap<Integer, HashSet<PVector>> newEdgeCandidates = new HashMap<Integer, HashSet<PVector>>();
         for (Factory f : factories) {
             newEdgeCandidates.put(f.id, new HashSet<PVector>());
@@ -38,31 +84,23 @@ class Nature {
             for (PVector cell : currentGlobalEdge) {
                 int x = (int)cell.x;
                 int y = (int)cell.y;
-                if (grid[x][y] > 0) { // Check if it hasn't been destroyed by a vine this frame
+                if (grid[x][y] > 0) {
                     float damage = getAnyGrassNeighbors(cell).size() * DAMAGE_PER_EXPOSED_SIDE;
                     overgrowthGrid[x][y] -= damage;
                 }
             }
         }
-        
-        // --- 3. NEW: INTERNAL DECAY SPREAD LOGIC ---
+
         for (int x = 0; x < gridWidth; x++) {
             for (int y = 0; y < gridHeight; y++) {
-                // Check if this is a damaged urban cell that passes the random chance
                 if (grid[x][y] > 0 && overgrowthGrid[x][y] < MAX_URBAN_HEALTH && random(1) < INTERNAL_SPREAD_CHANCE) {
-                    
-                    // Calculate how damaged this cell is (0.0 to 1.0)
                     float damageRatio = (MAX_URBAN_HEALTH - overgrowthGrid[x][y]) / MAX_URBAN_HEALTH;
                     float spreadPower = damageRatio * INTERNAL_SPREAD_STRENGTH;
-
-                    // Look at its neighbors
                     int[] dx = {0, 0, -1, 1};
                     int[] dy = {-1, 1, 0, 0};
                     for (int i = 0; i < 4; i++) {
                         int nx = x + dx[i];
                         int ny = y + dy[i];
-
-                        // If the neighbor is a valid urban cell, queue up damage for it
                         if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight && grid[nx][ny] > 0) {
                             damageToApply[nx][ny] += spreadPower;
                         }
@@ -71,20 +109,14 @@ class Nature {
             }
         }
 
-        // --- 4. APPLY ALL CALCULATED DAMAGE (from internal spread) and CHECK FOR NEWLY DESTROYED CELLS ---
         for (int x = 0; x < gridWidth; x++) {
             for (int y = 0; y < gridHeight; y++) {
-                // Apply the buffered internal spread damage
                 if (damageToApply[x][y] > 0) {
                     overgrowthGrid[x][y] -= damageToApply[x][y];
                 }
-
-                // Check if any cell (from any damage source) has been destroyed in this frame
                 if (grid[x][y] > 0 && overgrowthGrid[x][y] <= 0) {
                     grid[x][y] = -1;
                     houseGrid[x][y] = 0;
-
-                    // Find neighbors of the just-destroyed cell to form the new edge
                     int[] dx = {0, 0, -1, 1};
                     int[] dy = {-1, 1, 0, 0};
                     for (int j = 0; j < 4; j++) {
@@ -101,7 +133,6 @@ class Nature {
             }
         }
 
-        // --- 5. FINAL EDGE CLEANUP (No changes here) ---
         for (Factory f : factories) {
             f.activeEdge.addAll(newEdgeCandidates.get(f.id));
         }
