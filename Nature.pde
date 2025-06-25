@@ -55,86 +55,98 @@ class Nature {
     }
 
     void updateVinesAndDecay() {
-        // This is the old "reclaim" logic
-        float[][] damageToApply = new float[gridWidth][gridHeight];
-        ArrayList<PVector> currentGlobalEdge = new ArrayList<PVector>();
-        for (Factory f : factories) {
-            currentGlobalEdge.addAll(f.activeEdge);
-        }
+    // A fresh buffer to store all damage calculated this frame.
+    float[][] damageToApply = new float[gridWidth][gridHeight];
 
-        if (!currentGlobalEdge.isEmpty() && random(1) < VINE_SPAWN_CHANCE) {
-            PVector spawnPoint = currentGlobalEdge.get((int)random(currentGlobalEdge.size()));
-            vines.add(new Vine(spawnPoint));
-        }
+    // --- Step 1: CALCULATE ALL DAMAGE AND ADD IT TO THE BUFFER ---
 
-        for (int i = vines.size() - 1; i >= 0; i--) {
-            Vine v = vines.get(i);
-            v.grow();
-            if (v.isDead()) {
-                vines.remove(i);
-            }
+    // A. Calculate Vine Damage
+    // We create a temporary copy of the vines list to avoid issues if a vine dies while we iterate
+    for (Vine v : new ArrayList<Vine>(vines)) {
+        v.grow();
+        int vx = (int)v.location.x;
+        int vy = (int)v.location.y;
+        if (vx >= 0 && vx < gridWidth && vy >= 0 && vy < gridHeight && grid[vx][vy] > 0) {
+            damageToApply[vx][vy] += VINE_DAMAGE;
         }
-
-        HashMap<Integer, HashSet<PVector>> newEdgeCandidates = new HashMap<Integer, HashSet<PVector>>();
-        for (Factory f : factories) {
-            newEdgeCandidates.put(f.id, new HashSet<PVector>());
-        }
-
-        if (!currentGlobalEdge.isEmpty()) {
-            for (PVector cell : currentGlobalEdge) {
-                int x = (int)cell.x;
-                int y = (int)cell.y;
-                if (grid[x][y] > 0) {
-                    float damage = getAnyGrassNeighbors(cell).size() * DAMAGE_PER_EXPOSED_SIDE;
-                    overgrowthGrid[x][y] -= damage;
-                }
-            }
-        }
-
-        for (int x = 0; x < gridWidth; x++) {
-            for (int y = 0; y < gridHeight; y++) {
-                if (grid[x][y] > 0 && overgrowthGrid[x][y] < MAX_URBAN_HEALTH && random(1) < INTERNAL_SPREAD_CHANCE) {
-                    float damageRatio = (MAX_URBAN_HEALTH - overgrowthGrid[x][y]) / MAX_URBAN_HEALTH;
-                    float spreadPower = damageRatio * INTERNAL_SPREAD_STRENGTH;
-                    int[] dx = {0, 0, -1, 1};
-                    int[] dy = {-1, 1, 0, 0};
-                    for (int i = 0; i < 4; i++) {
-                        int nx = x + dx[i];
-                        int ny = y + dy[i];
-                        if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight && grid[nx][ny] > 0) {
-                            damageToApply[nx][ny] += spreadPower;
-                        }
-                    }
-                }
-            }
-        }
-
-        for (int x = 0; x < gridWidth; x++) {
-            for (int y = 0; y < gridHeight; y++) {
-                if (damageToApply[x][y] > 0) {
-                    overgrowthGrid[x][y] -= damageToApply[x][y];
-                }
-                if (grid[x][y] > 0 && overgrowthGrid[x][y] <= 0) {
-                    grid[x][y] = -1;
-                    houseGrid[x][y] = 0;
-                    int[] dx = {0, 0, -1, 1};
-                    int[] dy = {-1, 1, 0, 0};
-                    for (int j = 0; j < 4; j++) {
-                        int nx = x + dx[j];
-                        int ny = y + dy[j];
-                        if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight) {
-                            int neighborId = grid[nx][ny];
-                            if (neighborId > 0) {
-                                newEdgeCandidates.get(neighborId).add(new PVector(nx, ny));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for (Factory f : factories) {
-            f.activeEdge.addAll(newEdgeCandidates.get(f.id));
+        if (v.isDead()) {
+            vines.remove(v);
         }
     }
+
+    // B. Calculate Edge Erosion Damage
+    ArrayList<PVector> currentGlobalEdge = new ArrayList<PVector>();
+    for (Factory f : factories) {
+        currentGlobalEdge.addAll(f.activeEdge);
+    }
+    if (!currentGlobalEdge.isEmpty()) {
+        for (PVector cell : currentGlobalEdge) {
+            int x = (int)cell.x;
+            int y = (int)cell.y;
+            if (grid[x][y] > 0) {
+                float damage = getAnyGrassNeighbors(cell).size() * DAMAGE_PER_EXPOSED_SIDE;
+                damageToApply[x][y] += damage;
+            }
+        }
+    }
+
+    // C. Calculate Internal Spread Damage
+    for (int x = 0; x < gridWidth; x++) {
+        for (int y = 0; y < gridHeight; y++) {
+            if (grid[x][y] > 0 && overgrowthGrid[x][y] < MAX_URBAN_HEALTH && random(1) < INTERNAL_SPREAD_CHANCE) {
+                float damageRatio = (MAX_URBAN_HEALTH - overgrowthGrid[x][y]) / MAX_URBAN_HEALTH;
+                float spreadPower = damageRatio * INTERNAL_SPREAD_STRENGTH;
+                int[] dx = {0, 0, -1, 1};
+                int[] dy = {-1, 1, 0, 0};
+                for (int i = 0; i < 4; i++) {
+                    int nx = x + dx[i];
+                    int ny = y + dy[i];
+                    if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight && grid[nx][ny] > 0) {
+                        damageToApply[nx][ny] += spreadPower;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Step 2: APPLY ALL ACCUMULATED DAMAGE AND UPDATE THE GRID ---
+    HashMap<Integer, HashSet<PVector>> newEdgeCandidates = new HashMap<Integer, HashSet<PVector>>();
+    for (Factory f : factories) {
+        newEdgeCandidates.put(f.id, new HashSet<PVector>());
+    }
+
+    for (int x = 0; x < gridWidth; x++) {
+        for (int y = 0; y < gridHeight; y++) {
+            // Apply the total calculated damage from the buffer
+            if (damageToApply[x][y] > 0) {
+                overgrowthGrid[x][y] -= damageToApply[x][y];
+            }
+
+            // Now check if the cell has been destroyed
+            if (grid[x][y] > 0 && overgrowthGrid[x][y] <= 0) {
+                grid[x][y] = -1;
+                houseGrid[x][y] = 0;
+
+                // If it was destroyed, its neighbors might now be part of the new edge
+                int[] dx = {0, 0, -1, 1};
+                int[] dy = {-1, 1, 0, 0};
+                for (int j = 0; j < 4; j++) {
+                    int nx = x + dx[j];
+                    int ny = y + dy[j];
+                    if (nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight) {
+                        int neighborId = grid[nx][ny];
+                        if (neighborId > 0) {
+                            newEdgeCandidates.get(neighborId).add(new PVector(nx, ny));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add the newly exposed cells to the active edges of their respective factories
+    for (Factory f : factories) {
+        f.activeEdge.addAll(newEdgeCandidates.get(f.id));
+    }
+}
 }
