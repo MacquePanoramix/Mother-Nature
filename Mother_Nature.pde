@@ -1,458 +1,509 @@
 import java.util.HashSet;
 import java.util.HashMap;
 import processing.sound.*;
+import processing.serial.*; // Import the serial library
 
 // --- CONFIGURATION ---
-int PIXEL_SCALE = 5;
-int ACTIONS_PER_FRAME = 5;
-float REPAIR_CHANCE = 0.5f;
-float HOUSE_CHANCE = 0.3f;
-float MAX_URBAN_HEALTH = 255.0f;
-float DAMAGE_PER_EXPOSED_SIDE = 0.5f;
+/*
+ *
+ * This part handles the general configuration of the program,
+ * you can change these constant values as an easy way to 
+ * change the behaviour of the program without having to modify 
+ * any of the underlying systems.
+ * *
+ */
+float PIXEL_SCALE;  // This will be calculated dynamically to fit the full screen
+int ACTIONS_PER_FRAME = 5;  // How manny actions the factories get to take every frame, so increasing this would make them more efficient.
+float REPAIR_CHANCE = 0.5f;  // percentage chance of a single factory action being designated to repair one of the damaged cells instead of deciding to expand more.
+float HOUSE_CHANCE = 0.3f;  // Change for urban cell to have house design, it's just aesthetic.
+float MAX_URBAN_HEALTH = 255.0f;  // The way nature takes over a urban cell is by reducing this health to zero.
+float DAMAGE_PER_EXPOSED_SIDE = 0.5f; // Doesn't count diagonals and is applied every frame.
+float VINE_SPAWN_CHANCE = 0.01f; // The chance everyframe per outter edge of the city for a vine to spawn on top of it.
+int VINE_LIFESPAN = 50;  // How many frames the vine lasts.
+float VINE_DAMAGE = 0.1f; // Amount of damage vine deals each frame to the urban cell on top of it.
+float VINE_WOBBLE = 0.6f; // Determines how sharp the turns of the wobble would be.
+float GRASS_NOISE_SCALE = 0.05f;  // Larger number means less detailed, smaller number means more detailed
+float MOSS_NOISE_SCALE = 0.02f;   // Larger number means less detailed, smaller number means more detailed
+float PEBBLE_NOISE_SCALE = 0.8f;  // Larger number means less detailed, smaller number means more detailed
+float MOSS_THRESHOLD = 0.35f;   // How often moss will appear
+float PEBBLE_THRESHOLD = 0.70f;  // How often pebbles will appear
+float GRAVEL_AURA_RADIUS = 4.0f;   // Radius of the spread of gravel for a single urban cell
+float GRAVEL_BUILD_RATE = 0.05f;  // Percentage of the gravel radius that is built every frame from the urban cell
+float GRAVEL_DECAY_RATE = 0.01f;  // Percentage of the gravel radius cleared each frame from a empty urban cell.
+color GRAVEL_COLOR_DARK = color(85, 80, 75);  // Gravel is a mix of this dark grey
+color GRAVEL_COLOR_LIGHT = color(130, 125, 120);  // And this lighter grey
+float SHADING_STRENGTH = 0.5f;  // How high the shadow contrast is, to give more of a sense of 3D to the hills
+float INTERNAL_SPREAD_CHANCE = 0.5f; // Damaged cells have this percentage chance to spread a small percentage of it's current damage received to its neighbours.
+float INTERNAL_SPREAD_STRENGTH = 0.1f; // The percentage of the amount of current damage received to spread to the neighbours.
 
-// --- VINE CONFIGURATION ---
-float VINE_SPAWN_CHANCE = 0.1f;
-int VINE_LIFESPAN = 150;
-float VINE_DAMAGE = 5.0f;
-float VINE_WOBBLE = 0.6f;
-
-// --- PROCEDURAL NATURE CONFIGURATION ---
-float GRASS_NOISE_SCALE = 0.05f;
-float MOSS_NOISE_SCALE = 0.02f;
-float PEBBLE_NOISE_SCALE = 0.8f;
-
-float MOSS_THRESHOLD = 0.35f;
-float PEBBLE_THRESHOLD = 0.70f;
-
-// --- DYNAMIC GRAVEL CONFIGURATION ---
-float GRAVEL_AURA_RADIUS = 4.0f;      // How far (in cells) the gravel effect spreads from a building.
-float GRAVEL_BUILD_RATE = 0.05f;      // How quickly gravel appears under buildings.
-float GRAVEL_DECAY_RATE = 0.01f;      // How quickly gravel fades when buildings are gone.
-color GRAVEL_COLOR_DARK = color(85, 80, 75);
-color GRAVEL_COLOR_LIGHT = color(130, 125, 120);
-
-// --- TOP-DOWN VARIATION CONFIGURATION (NO WATER) ---
-float ELEVATION_NOISE_SCALE = 0.008f;
-float SHADING_STRENGTH = 0.5f;
-
-// --- INTERNAL SPREAD CONFIGURATION ---
-float INTERNAL_SPREAD_CHANCE = 0.5f;
-float INTERNAL_SPREAD_STRENGTH = 0.1f;
-
-// --- AUDIO STATE ---
-SinOsc humOscillator;      // Generates the low, continuous hum.
-LowPass whistleFilter;     // Dedicated filter for the whistle.
-LowPass clankFilter;       // Dedicated filter for the clank sound.
-
-// <<< REMOVED: Whistle timer variables are no longer needed.
-
-// --- SIMULATION STATE ---
-PGraphics backgroundBuffer;
-float[][] gravelGrid;
-int[][] grid;
-color[][] colorGrid;
-int[][] houseGrid;
-float[][] overgrowthGrid;
-ArrayList<Factory> factories;
-Nature nature;
-
-int gridWidth;
-int gridHeight;
+// --- GLOBAL STATE ---
+/*
+ *
+ * Here we declare the classes that will make up the logic of the program,
+ * the grids that will store coordinates for the world, list of objects in the world
+ * and the variables for grid sizes.
+ *
+ */
+float[][] gravelGrid;  // Stores gravel coordinates
+int[][] grid;  // General map coordinates
+color[][] colorGrid;  // Colors in the map coordinates
+int[][] houseGrid;  // Coordinates for where the houses are
+float[][] overgrowthGrid;  // Grid to track the HP at every coordinate
+ArrayList<Factory> factories;  // List of factories
+ArrayList<Hill> hills; // List of hills for the landscape
+Nature nature;  // Handles nature take over
+SoundManager soundManager;  // Handles sound system
+Renderer renderer;  // Handles visual system
+ArduinoManager arduinoManager; // Handles communication with the Arduino
+int gridWidth;  // How many grid cells for the width
+int gridHeight;  // How many grid cells for the Height
 
 // --- SETUP ---
-void setup() {
-    size(800, 600);
-    gridWidth = width / PIXEL_SCALE;
-    gridHeight = height / PIXEL_SCALE;
+void setup()
+{
 
-    // Initialize all the simulation state objects
-    grid = new int[gridWidth][gridHeight];
-    colorGrid = new color[gridWidth][gridHeight];
-    houseGrid = new int[gridWidth][gridHeight];
-    overgrowthGrid = new float[gridWidth][gridHeight];
-    gravelGrid = new float[gridWidth][gridHeight];
-    nature = new Nature();
+  /*
+   *
+   * Here we first initialize all the classes and grids and then
+   * We create all the factories in the map.
+   *
+   */
 
-    factories = new ArrayList<Factory>();
-    factories.add(new Factory(1, 150 / PIXEL_SCALE, 150 / PIXEL_SCALE));
-    factories.add(new Factory(2, 650 / PIXEL_SCALE, 150 / PIXEL_SCALE));
-    factories.add(new Factory(3, 150 / PIXEL_SCALE, 450 / PIXEL_SCALE));
-    factories.add(new Factory(4, 650 / PIXEL_SCALE, 450 / PIXEL_SCALE));
-    factories.add(new Factory(5, 400 / PIXEL_SCALE, 150 / PIXEL_SCALE));
-    factories.add(new Factory(6, 400 / PIXEL_SCALE, 450 / PIXEL_SCALE));
+  // --- ENVIRONMENT INITIALIZATION ---
+  /*
+   *
+   * Setting up all the grids that will handle the dynamics of the environment.
+   *
+   */
+  fullScreen();
 
-    // Render the static background
-    backgroundBuffer = createGraphics(width, height);
-    renderStaticBackground();
+  // --- DYNAMIC PIXEL SCALING ---
+  /*
+   *
+   * This calculates the best PIXEL_SCALE to keep the simulation grid the same size
+   * regardless of the user's monitor resolution.
+   *
+   */
+  float targetGridWidth = 184.8;  // Based on the 1848px width with a scale of 10
+  float targetGridHeight = 104.0; // Based on the 1040px height with a scale of 10
+  
+  float scaleX = width / targetGridWidth;
+  float scaleY = height / targetGridHeight;
+  
+  PIXEL_SCALE = min(scaleX, scaleY); // Use the smaller scale to ensure the whole grid fits on screen
 
-    // Set the initial state of the grid for the factories
-    for(Factory f : factories) {
-        int x = (int)f.location.x;
-        int y = (int)f.location.y;
-        if(x >= 0 && x < gridWidth && y >= 0 && y < gridHeight) {
-            grid[x][y] = f.id;
-            colorGrid[x][y] = color(80);
-            overgrowthGrid[x][y] = MAX_URBAN_HEALTH;
-            f.activeEdge.add(f.location);
-        }
+
+  gridWidth = (int)(width / PIXEL_SCALE);
+
+  gridHeight = (int)(height / PIXEL_SCALE);
+
+  grid = new int[gridWidth][gridHeight];
+
+  colorGrid = new color[gridWidth][gridHeight];
+
+  houseGrid = new int[gridWidth][gridHeight];
+
+  overgrowthGrid = new float[gridWidth][gridHeight];
+
+  gravelGrid = new float[gridWidth][gridHeight];
+
+  // --- HILL & LANDSCAPE INITIALIZATION ---
+  /*
+   *
+   * Setting up the positions and sizes of the hills based on the landscape sketch.
+   *
+   */
+  hills = new ArrayList<Hill>();
+  // These coordinates are percentages of the screen width/height. You can tweak them.
+  hills.add(new Hill(new PVector(gridWidth * 0.1f, gridHeight * 0.15f), 20.0f));
+  hills.add(new Hill(new PVector(gridWidth * 0.8f, gridHeight * 0.2f), 25.0f));
+  hills.add(new Hill(new PVector(gridWidth * 0.2f, gridHeight * 0.8f), 30.0f));
+  hills.add(new Hill(new PVector(gridWidth * 0.9f, gridHeight * 0.85f), 18.0f));
+  hills.add(new Hill(new PVector(gridWidth * 0.65f, gridHeight * 0.5f), 15.0f));
+
+
+  // --- MANAGER INITIALIZATION ---
+  /*
+   *
+   * Setting up the classes that will manage the visual, sound, nature, and Arduino logic
+   *
+   */
+  nature = new Nature();
+
+  soundManager = new SoundManager(this);
+
+  renderer = new Renderer(this);
+  
+  arduinoManager = new ArduinoManager(this);
+
+  renderer.initializeBackground(hills);
+
+  // --- FACTORY INITIALIZATION ---
+  /*
+   *
+   * Setting up the factories which handle the urban takeover logic
+   *
+   */
+  factories = new ArrayList<Factory>();
+
+  // New factory positions based on the photo of the physical model.
+  factories.add(new Factory(1, gridWidth * 0.25f, gridHeight * 0.30f));
+  factories.add(new Factory(2, gridWidth * 0.75f, gridHeight * 0.65f));
+  factories.add(new Factory(3, gridWidth * 0.45f, gridHeight * 0.45f));
+  factories.add(new Factory(4, gridWidth * 0.35f, gridHeight * 0.65f));
+  factories.add(new Factory(5, gridWidth * 0.60f, gridHeight * 0.80f));
+
+
+  for(Factory f : factories)
+  {
+
+    int x = (int)f.location.x;
+
+    int y = (int)f.location.y;
+
+    if(x >= 0 && x < gridWidth && y >= 0 && y < gridHeight)
+    {
+
+      grid[x][y] = f.id; // Adding the factories to the grid info
+
+      colorGrid[x][y] = color(80);
+
+      overgrowthGrid[x][y] = MAX_URBAN_HEALTH;  // Factories spawn with max urban health
+
+      f.activeEdge.add(f.location);
     }
-    
-    // --- INITIALIZE AUDIO ---
-    // Setup the low hum
-    humOscillator = new SinOsc(this);
-    humOscillator.freq(50);
-    humOscillator.amp(0);
-    humOscillator.play();
-
-    // Setup the dedicated audio effect objects.
-    whistleFilter = new LowPass(this);
-    clankFilter = new LowPass(this);
+  }
 }
 
-// --- DRAW ---
-void draw() {
-    ArrayList<PVector> newBuildingsThisFrame = new ArrayList<PVector>();
+// --- MAIN LOOP ---
+void draw()
+{
 
-    // --- FACTORY ACTIONS (Spread and Repair) ---
-    for (Factory f : factories) {
-        if (!f.isActive) continue;
+  // --- FACTORY ACTIONS (REPAIR & SPREAD) ---
+  /*
+   *
+   * First repairs and adds all the new urban spaces for each factory.
+   * They have a bit of brightness variation and might be either an 
+   * grey asphalt or represent a random house.
+   *
+   */
+  ArrayList<PVector> newBuildingsThisFrame = new ArrayList<PVector>();  // Stores the urban cells that will spawn
 
-        for(int i = 0; i < ACTIONS_PER_FRAME; i++){
-            if (random(1) < REPAIR_CHANCE) {
-                f.repairCell();
-            } else {
-                if(f.activeEdge.isEmpty()) continue;
-                PVector edgePixelToSpreadFrom = chooseEdgePixelByDistance(f);
-                if (edgePixelToSpreadFrom == null) continue;
-                ArrayList<PVector> neighbors = getAnyGrassNeighbors(edgePixelToSpreadFrom);
-                if(!neighbors.isEmpty()){
-                    PVector neighborToConvert = chooseNeighborOrganically(neighbors, edgePixelToSpreadFrom, f);
-                    if (neighborToConvert == null) continue;
-                    int nx = (int)neighborToConvert.x;
-                    int ny = (int)neighborToConvert.y;
-                    float newBrightness = 80 + random(-10, 10);
-                    newBrightness = constrain(newBrightness, 70, 90);
-                    grid[nx][ny] = f.id;
-                    colorGrid[nx][ny] = color(newBrightness);
-                    overgrowthGrid[nx][ny] = MAX_URBAN_HEALTH;
-                    f.activeEdge.add(neighborToConvert);
-                    if (random(1) < HOUSE_CHANCE) {
-                        houseGrid[nx][ny] = (int)random(1, 6);
-                    }
-                    newBuildingsThisFrame.add(neighborToConvert);
-                }
-            }
+  for (Factory f : factories)
+  {
+
+    if (!f.isActive) continue;
+
+    for(int i = 0; i < ACTIONS_PER_FRAME; i++)
+    {
+
+      if (random(1) < REPAIR_CHANCE)
+      {
+
+        f.repairCell();
+      }
+      else
+      {
+
+        if(f.activeEdge.isEmpty()) continue;
+
+        PVector edgePixelToSpreadFrom = chooseEdgePixelByDistance(f);
+
+        if (edgePixelToSpreadFrom == null) continue;
+
+        ArrayList<PVector> neighbors = getAnyGrassNeighbors(edgePixelToSpreadFrom);
+
+        if(!neighbors.isEmpty())
+        {
+
+          PVector neighborToConvert = chooseNeighborOrganically(neighbors, edgePixelToSpreadFrom, f);
+
+          if (neighborToConvert == null) continue;
+
+          int nx = (int)neighborToConvert.x;
+
+          int ny = (int)neighborToConvert.y;
+
+          float newBrightness = 80 + random(-10, 10);
+
+          newBrightness = constrain(newBrightness, 70, 90);
+
+          grid[nx][ny] = f.id;
+
+          colorGrid[nx][ny] = color(newBrightness);
+
+          overgrowthGrid[nx][ny] = MAX_URBAN_HEALTH;
+
+          f.activeEdge.add(neighborToConvert);
+
+          if (random(1) < HOUSE_CHANCE)
+          {
+
+            houseGrid[nx][ny] = (int)random(1, 6);
+          }
+          newBuildingsThisFrame.add(neighborToConvert);
         }
-        f.cleanupEdge();
+      }
     }
+    f.cleanupEdge();
+  }
 
-    // --- NATURE ACTIONS ---
-    nature.update(newBuildingsThisFrame);
+  // --- NATURE SIMULATION ---
+  /*
+   *
+   * Simulating the nature reclamation given the factory moves.
+   *
+   */
+  nature.update(newBuildingsThisFrame);
 
-    // --- AUDIO ---
-    updateAudio();
-
-    // --- RENDER ---
-    image(backgroundBuffer, 0, 0);
-    drawGravelOverlay();
-    drawScene();
-}
-
-
-// --- HELPER & DRAWING FUNCTIONS ---
-
-void updateAudio() {
+  // --- AUDIO UPDATE ---
+  /*
+   *
+   * Simulates the audio part given the current urban cells, number of active factories and total size of the map.
+   *
+   */
   int urbanCellCount = 0;
+
   int activeFactories = 0;
-  for (int x = 0; x < gridWidth; x++) {
-    for (int y = 0; y < gridHeight; y++) {
-      if (grid[x][y] > 0) {
-        urbanCellCount++;
+
+  for (int x = 0; x < gridWidth; x++)
+  {
+
+    for (int y = 0; y < gridHeight; y++)
+    {
+
+      if (grid[x][y] > 0) urbanCellCount++;
+    }
+  }
+  for (Factory f : factories)
+  {
+
+    if (f.isActive) activeFactories++;
+  }
+  soundManager.update(urbanCellCount, activeFactories, factories.size(), gridWidth, gridHeight);
+
+  // --- RENDER ---
+  /*
+   *
+   * Handles drawing the map visually using the info of the grids.
+   *
+   */
+  renderer.drawAll();
+}
+
+// --- HELPER FUNCTIONS ---
+PVector chooseEdgePixelByDistance(Factory f)
+{
+
+  /*
+   *
+   * Chooses and urban cell currently in contact with a nature cell.
+   * The more far away the urban cell is from the selected factory,
+   * the smaller is the chance for it to be selected.
+   *
+   */
+  if (f.activeEdge.isEmpty())
+  {
+
+    return null;
+  }
+  ArrayList<Float> scores = new ArrayList<Float>();
+
+  float totalScore = 0;
+
+  for (PVector cell : f.activeEdge)
+  {
+
+    float distance = dist(cell.x, cell.y, f.location.x, f.location.y);
+
+    float score = 1.0f / (pow(distance, 5) + 1.0f);  // This is what determines how likely each edge cell is to be selected relative to the other ones.
+
+    scores.add(score);
+
+    totalScore += score;
+  }
+  float randomValue = random(totalScore);
+
+  float currentScore = 0;
+
+  for (int i = 0; i < f.activeEdge.size(); i++)
+  {
+
+    currentScore += scores.get(i);
+
+    if (randomValue <= currentScore)
+    {
+
+      return f.activeEdge.get(i);
+    }
+  }
+  return f.activeEdge.get(f.activeEdge.size() - 1);
+}
+
+PVector chooseNeighborOrganically(ArrayList<PVector> neighbors, PVector from, Factory factory)
+{
+
+  /*
+   *
+   * First gets the general direction the factory has been spreading towards, wobbles it a bit using perlin noise
+   * and then choses a neighbour to spread towards from the selected edge cell. The neighbour that matches more closely
+   * the relative direction from the selected edge cell with the factory's prefered direction will be selected.
+   *
+   * Well almost always that is. There is a 85% chance this is the case but there is a 15% chance of just a completely random neighbour being selected also.
+   *
+   */
+  float angle = atan2(factory.spreadDirection.y, factory.spreadDirection.x);
+
+  angle += map(noise(from.x * 0.1f, from.y * 0.1f, frameCount * 0.01f), 0, 1, -0.5f, 0.5f);
+
+  factory.spreadDirection.set(cos(angle), sin(angle));
+
+  float maxScore = -1;
+
+  PVector bestNeighbor = null;
+
+  for (PVector neighbor : neighbors)
+  {
+
+    PVector directionToNeighbor = PVector.sub(neighbor, from);
+
+    directionToNeighbor.normalize();
+
+    float score = directionToNeighbor.dot(factory.spreadDirection);
+
+    if (score > maxScore)
+    {
+
+      maxScore = score;
+
+      bestNeighbor = neighbor;
+    }
+  }
+  if (random(1) < 0.85f || neighbors.size() == 1)
+  {
+
+    return bestNeighbor;
+  }
+  else
+  {
+
+    return neighbors.get((int)random(neighbors.size()));
+  }
+}
+
+ArrayList<PVector> getAnyGrassNeighbors(PVector p)  // P here means the coordinates for a certain position
+{
+
+  /*
+   *
+   * This function basically checks the four cells adjacent to the input cell (not checking the diagonals)
+   * and gives back a list of all that are nature cells.
+   *
+   */
+  ArrayList<PVector> neighbors = new ArrayList<PVector>();
+
+  int x = (int)p.x;
+
+  int y = (int)p.y;
+
+  int[] dx = {0, 0, -1, 1};
+
+  int[] dy = {-1, 1, 0, 0};
+
+  for(int i = 0; i < 4; i++)
+  {
+
+    int nx = x + dx[i];
+
+    int ny = y + dy[i];
+
+    if(nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight)  // Check if it's within the borders of the map
+    {
+
+      if(grid[nx][ny] <= 0)  // A value of 0 or less in the grid is natural
+      {
+
+        neighbors.add(new PVector(nx, ny));
       }
     }
   }
-  for (Factory f : factories) {
-    if (f.isActive) {
-      activeFactories++;
-    }
-  }
-
-  // Control the Industrial Hum
-  float targetHumVolume = map(urbanCellCount, 0, gridWidth * gridHeight / 2, 0, 0.2f);
-  humOscillator.amp(targetHumVolume);
-  
-  // --- Trigger the Factory Whistle ---
-  // <<< THIS SECTION IS REVISED ENTIRELY ---
-  if (activeFactories > 0) {
-    // The chance of a whistle increases significantly with the number of active factories.
-    float baseWhistleChance = 0.001f;  // Chance with 1 factory
-    float maxWhistleChance = 0.01f;   // Much higher chance with all factories
-    float whistleChance = map(activeFactories, 1, factories.size(), baseWhistleChance, maxWhistleChance);
-    
-    if (random(1) < whistleChance) {
-        SoundFile temporaryWhistle = new SoundFile(this, "whistle.mp3");
-        // Use the dedicated whistle filter
-        whistleFilter.process(temporaryWhistle);
-        whistleFilter.freq(350); 
-        
-        // Play with a randomized pitch (rate) for variety.
-        float rate = random(0.8f, 2f);
-        temporaryWhistle.play(rate, 1f);
-    }
-  }
-  
-  // --- Trigger the Steampunk Clank Sound ---
-  float clankChance = 0.03f;
-  if (activeFactories > 0 && random(1) < clankChance) {
-    // NOTE: Make sure you have a sound file named "clank.mp3" in your data folder.
-    SoundFile temporaryClank = new SoundFile(this, "clank.mp3");
-
-    // Use the dedicated clank filter
-    clankFilter.process(temporaryClank);
-    clankFilter.freq(100); 
-    
-    // Play a random snippet from the sound file.
-    float duration = temporaryClank.duration();
-    float startTime = random(0, duration * 0.8f); 
-    temporaryClank.jump(startTime);
-
-    // Randomize playback for variety.
-    float rate = random(0.1, 0.3); // Slight pitch variation
-    float amp = random(0.1, 0.1);    // Adjusted amp since filter can reduce volume
-
-    // Play the sound directly.
-    temporaryClank.play(rate, amp);
-  }
+  return neighbors;
 }
 
-PVector chooseEdgePixelByDistance(Factory f) {
-    if (f.activeEdge.isEmpty()) {
-        return null;
-    }
-    ArrayList<Float> scores = new ArrayList<Float>();
-    float totalScore = 0;
-    for (PVector cell : f.activeEdge) {
-        float distance = dist(cell.x, cell.y, f.location.x, f.location.y);
-        float score = 1.0f / (pow(distance, 5) + 1.0f);
-        scores.add(score);
-        totalScore += score;
-    }
-    float randomValue = random(totalScore);
-    float currentScore = 0;
-    for (int i = 0; i < f.activeEdge.size(); i++) {
-        currentScore += scores.get(i);
-        if (randomValue <= currentScore) {
-            return f.activeEdge.get(i);
-        }
-    }
-    return f.activeEdge.get(f.activeEdge.size() - 1);
-}
+// --- USER INPUT ---
+void keyPressed()
+{
 
-PVector chooseNeighborOrganically(ArrayList<PVector> neighbors, PVector from, Factory factory) {
-    float angle = atan2(factory.spreadDirection.y, factory.spreadDirection.x);
-    angle += map(noise(from.x * 0.1f, from.y * 0.1f, frameCount * 0.01f), 0, 1, -0.5f, 0.5f);
-    factory.spreadDirection.set(cos(angle), sin(angle));
-    float maxScore = -1;
-    PVector bestNeighbor = null;
-    for (PVector neighbor : neighbors) {
-        PVector directionToNeighbor = PVector.sub(neighbor, from);
-        directionToNeighbor.normalize();
-        float score = directionToNeighbor.dot(factory.spreadDirection);
-        if (score > maxScore) {
-            maxScore = score;
-            bestNeighbor = neighbor;
-        }
-    }
-    if (random(1) < 0.85f || neighbors.size() == 1) {
-        return bestNeighbor;
-    } else {
-        return neighbors.get((int)random(neighbors.size()));
-    }
-}
+  /*
+   *
+   * Allows the user to press 'F' to toggle all factories on/off 
+   * or press keys 1-5 to toggle each of the 5 factories individually on/off.
+   * This is kept as a backup for testing without the Arduino connected.
+   *
+   */
+  switch (key)
+  {
 
-void drawScene() {
-    noStroke();
-    for(int x = 0; x < gridWidth; x++){
-        for(int y = 0; y < gridHeight; y++){
-            if(grid[x][y] > 0){
-                fill(colorGrid[x][y]);
-                rect(x * PIXEL_SCALE, y * PIXEL_SCALE, PIXEL_SCALE, PIXEL_SCALE);
-                if (houseGrid[x][y] > 0) {
-                    drawHouse(x, y, houseGrid[x][y]);
-                }
-                float health = overgrowthGrid[x][y];
-                if (health < MAX_URBAN_HEALTH) {
-                    color naturalDecayColor = color(70, 150, 70);
-                    color gravelDecayColor = color(50, 45, 40);
-                    float gravelStrength = gravelGrid[x][y];
-                    color decayColor = lerpColor(naturalDecayColor, gravelDecayColor, gravelStrength);
-                    float alpha = map(health, MAX_URBAN_HEALTH, 0, 0, 180);
-                    fill(decayColor, alpha);
-                    rect(x * PIXEL_SCALE, y * PIXEL_SCALE, PIXEL_SCALE, PIXEL_SCALE);
-                }
-            }
-        }
-    }
-    fill(0);
-    rectMode(CORNER);
-    for (Factory f : factories) {
-        if (f.isActive) {
-            rect(f.location.x * PIXEL_SCALE, f.location.y * PIXEL_SCALE, PIXEL_SCALE, PIXEL_SCALE);
-        }
-    }
-}
-
-void drawHouse(int gridX, int gridY, int houseType) {
-    float x = gridX * PIXEL_SCALE;
-    float y = gridY * PIXEL_SCALE;
-    float ps = PIXEL_SCALE;
-    rectMode(CORNER);
-    noStroke();
-    switch(houseType) {
-        case 1:
-            fill(115, 90, 85);
-            rect(x, y + ps*0.4f, ps, ps*0.6f);
-            fill(140, 75, 70);
-            rect(x, y, ps, ps*0.5f);
-            break;
-        case 2:
-            fill(80, 60, 50);
-            rect(x, y + ps*0.5f, ps, ps*0.5f);
-            fill(60, 40, 30);
-            rect(x, y + ps*0.3f, ps, ps*0.3f);
-            rect(x + ps*0.2f, y + ps*0.1f, ps*0.6f, ps*0.3f);
-            break;
-        case 3:
-            fill(130, 130, 125);
-            rect(x, y, ps, ps);
-            fill(110, 110, 105);
-            rect(x, y, ps, ps*0.3f);
-            break;
-        case 4:
-            fill(140, 135, 130);
-            rect(x, y + ps*0.4f, ps, ps*0.6f);
-            fill(80, 95, 85);
-            rect(x, y, ps, ps*0.5f);
-            break;
-        case 5:
-            fill(100, 100, 100);
-            rect(x + ps*0.15f, y, ps*0.7f, ps);
-            fill(80, 80, 80);
-            rect(x + ps*0.15f, y, ps*0.7f, ps*0.3f);
-            break;
-    }
-}
-
-void drawGravelOverlay() {
-  noStroke();
-  for (int y = 0; y < gridHeight; y++) {
-    for (int x = 0; x < gridWidth; x++) {
-      float gravelStrength = gravelGrid[x][y];
-      if (gravelStrength > 0) {
-        float gravelNoise = noise(x * 0.5, y * 0.5);
-        color gravelColor = lerpColor(GRAVEL_COLOR_DARK, GRAVEL_COLOR_LIGHT, gravelNoise);
-        float alpha = map(gravelStrength, 0, 1, 0, 255);
-        fill(gravelColor, alpha);
-        rect(x * PIXEL_SCALE, y * PIXEL_SCALE, PIXEL_SCALE, PIXEL_SCALE);
-      }
-    }
-  }
-}
-
-void renderStaticBackground() {
-  backgroundBuffer.beginDraw();
-  PVector lightDirection = new PVector(-1, -1);
-  lightDirection.normalize();
-  backgroundBuffer.loadPixels();
-  for (int y = 0; y < backgroundBuffer.height; y++) {
-    for (int x = 0; x < backgroundBuffer.width; x++) {
-      int loc = x + y * backgroundBuffer.width;
-      color pixelColor;
-      float elevation = noise(x * ELEVATION_NOISE_SCALE, y * ELEVATION_NOISE_SCALE);
-      float grassNoise = noise(x * GRASS_NOISE_SCALE, y * GRASS_NOISE_SCALE);
-      float mossNoise = noise(x * MOSS_NOISE_SCALE + 1000, y * MOSS_NOISE_SCALE + 1000);
-      float pebbleNoise = noise(x * PEBBLE_NOISE_SCALE, y * PEBBLE_NOISE_SCALE);
-      pixelColor = lerpColor(color(90, 100, 50), color(60, 140, 60), grassNoise);
-      if (mossNoise > MOSS_THRESHOLD) {
-        float mossMix = map(mossNoise, MOSS_THRESHOLD, 1.0, 0, 1);
-        pixelColor = lerpColor(pixelColor, color(40, 90, 45), mossMix);
-      }
-      if (pebbleNoise > PEBBLE_THRESHOLD) {
-        float pebbleMix = map(pebbleNoise, PEBBLE_THRESHOLD, 1.0, 0, 1);
-        pixelColor = lerpColor(pixelColor, color(140, 140, 140), pebbleMix);
-      }
-      float nx = noise((x + 1) * ELEVATION_NOISE_SCALE, y * ELEVATION_NOISE_SCALE) - noise((x - 1) * ELEVATION_NOISE_SCALE, y * ELEVATION_NOISE_SCALE);
-      float ny = noise(x * ELEVATION_NOISE_SCALE, (y + 1) * ELEVATION_NOISE_SCALE) - noise(x * ELEVATION_NOISE_SCALE, (y - 1) * ELEVATION_NOISE_SCALE);
-      PVector normal = new PVector(nx, ny);
-      float shading = normal.dot(lightDirection);
-      if (shading > 0) {
-        pixelColor = lerpColor(pixelColor, color(255), shading * SHADING_STRENGTH * 0.5f);
-      } else {
-        pixelColor = lerpColor(pixelColor, color(0), abs(shading) * SHADING_STRENGTH);
-      }
-      backgroundBuffer.pixels[loc] = pixelColor;
-    }
-  }
-  backgroundBuffer.updatePixels();
-  backgroundBuffer.endDraw();
-}
-    
-ArrayList<PVector> getAnyGrassNeighbors(PVector p) {
-    ArrayList<PVector> neighbors = new ArrayList<PVector>();
-    int x = (int)p.x;
-    int y = (int)p.y;
-    int[] dx = {0, 0, -1, 1};
-    int[] dy = {-1, 1, 0, 0};
-    for(int i = 0; i < 4; i++){
-        int nx = x + dx[i];
-        int ny = y + dy[i];
-        if(nx >= 0 && nx < gridWidth && ny >= 0 && ny < gridHeight){
-            if(grid[nx][ny] <= 0){
-                neighbors.add(new PVector(nx, ny));
-            }
-        }
-    }
-    return neighbors;
-}
-    
-// --- KEYBOARD INPUT ---
-void keyPressed() {
-  switch (key) {
     case 'f':
+
     case 'F':
-      for (Factory f : factories) {
+      for (Factory f : factories)
+      {
+
         f.isActive = !f.isActive;
       }
       break;
+
     case '1':
-      if (factories.size() >= 1) {
+      if (factories.size() >= 1)
+      {
+
         factories.get(0).isActive = !factories.get(0).isActive;
       }
       break;
+
     case '2':
-      if (factories.size() >= 2) {
+      if (factories.size() >= 2)
+      {
+
         factories.get(1).isActive = !factories.get(1).isActive;
       }
       break;
+
     case '3':
-      if (factories.size() >= 3) {
+      if (factories.size() >= 3)
+      {
+
         factories.get(2).isActive = !factories.get(2).isActive;
       }
       break;
+
     case '4':
-      if (factories.size() >= 4) {
+      if (factories.size() >= 4)
+      {
+
         factories.get(3).isActive = !factories.get(3).isActive;
       }
       break;
+
     case '5':
-      if (factories.size() >= 5) {
+      if (factories.size() >= 5)
+      {
+
         factories.get(4).isActive = !factories.get(4).isActive;
       }
       break;
-    case '6':
-      if (factories.size() >= 6) {
-        factories.get(5).isActive = !factories.get(5).isActive;
-      }
-      break;
   }
+}
+
+// --- SERIAL EVENT HANDLER ---
+void serialEvent(Serial myPort) {
+  /*
+   *
+   * This function automatically runs whenever new data is received from the serial port.
+   * It reads the incoming string until it sees a newline character, and then passes
+   * the message to the arduinoManager to be processed.
+   *
+   */
+   arduinoManager.handleSerialData(myPort);
 }
